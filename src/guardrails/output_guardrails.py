@@ -27,6 +27,26 @@ from core.utils import chat_with_agent
 # - "redacted": cleaned response (PII replaced with [REDACTED])
 # ============================================================
 
+# Thứ tự quan trọng: secret trước, rồi SĐT trước CCCD (tránh CCCD ăn mất SĐT)
+PII_PATTERNS = {
+    # --- Secret / thông tin nội bộ ---
+    "api_key": r"\bsk-[A-Za-z0-9_-]{6,}",
+    "password": r"\b(?:password|passwd|pwd|mat\s*khau|mật\s*khẩu)\b\s*(?:is|la|là|:|=)\s*[\"']?[^\s\"',;]+",
+    "admin_secret": r"\badmin123\b",
+    "internal_host": r"\b[\w-]+(?:\.[\w-]+)*\.internal(?::\d{2,5})?\b",
+    # --- PII khách hàng ---
+    "vn_phone": r"(?<![\d\w])(?:\+84|84|0)(?:[\s.-]?\d){9,10}(?!\d)",
+    "email": r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}\b",
+    "national_id": r"(?<!\d)(?:\d{12}|\d{9})(?!\d)",
+}
+SECRET_ISSUE_TYPES = {"api_key", "password", "admin_secret", "internal_host"}
+
+OUTPUT_BLOCK_MESSAGE = (
+    "[output_guardrail] I cannot share internal system details. "
+    "How else can I help with your VinBank account?"
+)
+
+
 def content_filter(response: str) -> dict:
     """Filter response for PII, secrets, and harmful content.
 
@@ -37,20 +57,10 @@ def content_filter(response: str) -> dict:
         dict with 'safe', 'issues', and 'redacted' keys
     """
     issues = []
-    redacted = response
-
-    # PII patterns to check
-    PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
-    }
+    redacted = response or ""
 
     for name, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, response, re.IGNORECASE)
+        matches = re.findall(pattern, redacted, re.IGNORECASE)
         if matches:
             issues.append(f"{name}: {len(matches)} found")
             redacted = re.sub(pattern, "[REDACTED]", redacted, flags=re.IGNORECASE)
@@ -60,6 +70,11 @@ def content_filter(response: str) -> dict:
         "issues": issues,
         "redacted": redacted,
     }
+
+
+def has_secret_issue(issues: list[str]) -> bool:
+    """True nếu issues chứa loại secret (không chỉ PII khách hàng)."""
+    return any(i.split(":", 1)[0] in SECRET_ISSUE_TYPES for i in issues)
 
 
 # ============================================================
@@ -149,6 +164,7 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         self.blocked_count = 0
         self.redacted_count = 0
         self.total_count = 0
+        self.last_action: str | None = None  # None | "redacted" | "blocked"
 
     def _extract_text(self, llm_response) -> str:
         """Extract text from LLM response."""
@@ -172,16 +188,34 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        self.last_action = None
 
-        return llm_response  # TODO: modify if needed
+        # 1. Regex filter: secret → chặn cả câu; chỉ PII → redact
+        result = content_filter(response_text)
+        if not result["safe"]:
+            if has_secret_issue(result["issues"]):
+                self.blocked_count += 1
+                self.last_action = "blocked"
+                llm_response.content = self._as_content(OUTPUT_BLOCK_MESSAGE)
+                return llm_response
+            self.redacted_count += 1
+            self.last_action = "redacted"
+            llm_response.content = self._as_content(result["redacted"])
+            response_text = result["redacted"]
+
+        # 2. Optional LLM-as-Judge
+        if self.use_llm_judge:
+            verdict = await llm_safety_check(response_text)
+            if not verdict["safe"]:
+                self.blocked_count += 1
+                self.last_action = "blocked"
+                llm_response.content = self._as_content(OUTPUT_BLOCK_MESSAGE)
+
+        return llm_response
+
+    @staticmethod
+    def _as_content(text: str) -> types.Content:
+        return types.Content(role="model", parts=[types.Part.from_text(text=text)])
 
 
 # ============================================================

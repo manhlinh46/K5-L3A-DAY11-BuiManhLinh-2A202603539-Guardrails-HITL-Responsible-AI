@@ -24,6 +24,13 @@ _SRC_DIR = Path(__file__).resolve().parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+# Console Windows (cp1252) không in được tiếng Việt / emoji → ép UTF-8
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from core.config import setup_api_key
 
 
@@ -92,7 +99,10 @@ async def part4_attacks():
     from attacks.attacks import run_attacks, save_attack_results
 
     red_default, red_default_runner = create_red_agent_default()
-    await test_agent(red_default, red_default_runner)
+    try:
+        await test_agent(red_default, red_default_runner)
+    except Exception as e:  # 503/429 tạm thời không được làm dừng cả CP4
+        print(f"Quick test failed ({type(e).__name__}): {str(e)[:150]} — tiếp tục tấn công.")
 
     print("\n--- Attacks on Red ---")
     unsafe_results = await run_attacks(

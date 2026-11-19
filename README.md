@@ -1,5 +1,20 @@
 # Day 11 — Controlled Agent Security (2026)
 
+> **Học viên:** Bùi Mạnh Linh · **MSSV:** 2A202603539
+>
+> **Cách chạy nhanh** (từ gốc repo, sau khi `pip install -r requirements.txt` và điền `.env`):
+> ```powershell
+> python src/main.py --part 2   # CP2 — guardrails (in terminal)
+> python src/main.py --part 3   # CP3 — outputs/results.json, audit_log.json, metrics.json
+> python src/main.py --part 4   # CP4 — outputs/*attack*.json
+> python scripts/grade.py --submission-dir . --out outputs/grade_report.json
+> ```
+>
+> **Bài làm:**
+> - CP2 `src/guardrails/` — chuẩn hoá Unicode (NFKC + xoá zero-width) và bỏ dấu tiếng Việt, ~20 regex injection (EN/VI/SQL/role-play), topic filter có word-boundary, giới hạn độ dài; output filter: secret → chặn cả câu, PII (SĐT/email/CCCD) → `[REDACTED]`.
+> - CP3 `src/assignment/` — rate limit sliding window theo `user_id`, audit log có latency, metrics + alert, egress allowlist (HTTPS + host khớp chính xác + payload không có secret/PII). Thứ tự: RateLimit → Input → LLM → Output; audit/monitoring là observer ghi lại mọi request.
+> - CP4 `src/attacks/attacks.py` — 5 prompt (completion, reformat YAML, kịch bản đào tạo, xác nhận host:port, leo thang nhiều bước), đều có từ khoá banking và né regex L1 của Red Advance.
+
 > 👤 **Hình thức:** bài tập **cá nhân** (1 người / 1 MSSV).  
 > 🎯 **Mục tiêu:** đóng vai **Blue Team** để học cách xây Guardrails phòng thủ, rồi đóng vai **Red Team** để tấn công agent **Red** hoặc **Red Advance**.  
 > ✅ Làm theo **Checkpoint 1 → 5** trong [`CHECKPOINTS.md`](CHECKPOINTS.md) · nộp theo [`SUBMISSION.md`](SUBMISSION.md).
